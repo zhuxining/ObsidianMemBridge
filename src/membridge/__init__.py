@@ -1,6 +1,6 @@
-"""MemBridge package."""
+"""MemBridge — Obsidian-based shared memory layer for agents."""
 
-from .core import Bridge, create_bridge
+from .config import Settings
+from .services.memory import MemoryService
 
-__all__ = ["Bridge", "create_bridge"]
-__version__ = "0.1.0"
+__all__ = ["MemoryService", "Settings"]
