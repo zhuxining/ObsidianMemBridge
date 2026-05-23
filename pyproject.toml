@@ -5,6 +5,7 @@ description = "membridge is an Obsidian-based shared memory layer for agents, pr
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "pyyaml>=6.0",
     "typer>=0.25.1",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
