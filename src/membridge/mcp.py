@@ -1,13 +1,13 @@
 """MCP server — FastMCP tools for MemBridge."""
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastmcp import FastMCP
 
-from .config import Settings
-from .domain.models import MemoryFilter, MemoryFrontmatter
-from .services.memory import MemoryService
+from membridge.core import MemoryService
+from membridge.models import MemoryFilter, MemoryFrontmatter
+from membridge.settings import Settings
 
 mcp = FastMCP("MemBridge")
 
@@ -19,21 +19,21 @@ def _service() -> MemoryService:
 
 @mcp.tool()
 def read_memories(
-    path: Optional[str] = None,
-    status: Optional[str] = None,
-    type: Optional[str] = None,
-    scope: Optional[str] = None,
-    project: Optional[str] = None,
-    source: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    vault_root: Optional[str] = None,
+    path: str | None = None,
+    status: str | None = None,
+    type: str | None = None,
+    scope: str | None = None,
+    project: str | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
+    vault_root: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read a single memory by path, or query memories with filters."""
     svc = _service()
     if vault_root:
         svc.init_vault(Path(vault_root))
     else:
-        svc._require_store()
+        svc._require_vault()
 
     if path:
         doc = svc.read_memory(path)
@@ -58,18 +58,18 @@ def write_memory(
     type: str,
     source: str,
     status: str = "active",
-    scope: Optional[str] = None,
-    project: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    path: Optional[str] = None,
-    vault_root: Optional[str] = None,
+    scope: str | None = None,
+    project: str | None = None,
+    tags: list[str] | None = None,
+    path: str | None = None,
+    vault_root: str | None = None,
 ) -> dict[str, Any]:
     """Write a new memory to the vault."""
     svc = _service()
     if vault_root:
         svc.init_vault(Path(vault_root))
     else:
-        svc._require_store()
+        svc._require_vault()
 
     frontmatter = MemoryFrontmatter(
         status=status,
@@ -86,16 +86,16 @@ def write_memory(
 @mcp.tool()
 def update_memory(
     path: str,
-    content: Optional[str] = None,
-    frontmatter_patch: Optional[dict[str, Any]] = None,
-    vault_root: Optional[str] = None,
+    content: str | None = None,
+    frontmatter_patch: dict[str, Any] | None = None,
+    vault_root: str | None = None,
 ) -> dict[str, Any]:
     """Update an existing memory."""
     svc = _service()
     if vault_root:
         svc.init_vault(Path(vault_root))
     else:
-        svc._require_store()
+        svc._require_vault()
 
     doc = svc.update_memory(path, content, frontmatter_patch)
     return doc.model_dump(mode="json")

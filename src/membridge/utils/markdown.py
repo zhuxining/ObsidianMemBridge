@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from ..domain.errors import NotFoundError, ValidationError
+from membridge.models import NotFoundError, ValidationError
 
 FRONTMATTER_RE = re.compile(r"^---\n(?:([^\n].*?)\n)?---\n", re.DOTALL)
 
@@ -19,7 +19,7 @@ def parse_markdown(text: str) -> tuple[dict[str, Any], str]:
     if not m:
         return {}, text
     fm = yaml.safe_load(m.group(1) or "") or {}
-    body = text[m.end():]
+    body = text[m.end() :]
     return fm, body
 
 
@@ -37,15 +37,15 @@ def read_file_markdown(path) -> tuple[dict[str, Any], str]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        raise NotFoundError(f"File not found: {path}")
-    except UnicodeDecodeError:
-        raise ValidationError(f"File is not valid UTF-8: {path}")
+    except FileNotFoundError as exc:
+        raise NotFoundError(f"File not found: {path}") from exc
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"File is not valid UTF-8: {path}") from exc
 
     try:
         return parse_markdown(text)
     except yaml.YAMLError as exc:
-        raise ValidationError(f"Invalid YAML frontmatter in {path}: {exc}")
+        raise ValidationError(f"Invalid YAML frontmatter in {path}: {exc}") from exc
 
 
 def write_file_markdown(path, frontmatter: dict[str, Any], body: str) -> None:

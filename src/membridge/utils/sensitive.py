@@ -3,9 +3,12 @@
 import re
 
 _SENSITIVE_PATTERNS = [
-    re.compile(r"(?:api[_-]?key|secret[_-]?key|password|auth[_-]?token|private[_-]?key)", re.I),
+    re.compile(
+        r"(?:api[_-]?key|secret[_-]?key|password|auth[_-]?token|private[_-]?key)",
+        re.IGNORECASE,
+    ),
     re.compile(r"(?:sk-[A-Za-z0-9]{20,})"),  # OpenAI-style keys
-    re.compile(r"(?:ghp_[A-Za-z0-9]{36})"),   # GitHub PAT
+    re.compile(r"(?:ghp_[A-Za-z0-9]{36})"),  # GitHub PAT
 ]
 
 

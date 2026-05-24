@@ -41,6 +41,8 @@ MCP Server        CLI
 - **MemBridge Core**：Frontmatter 校验、文件读写、过滤查询。
 - **Obsidian Vault Adapter**：Markdown 读写和 Frontmatter 解析。
 
+目录结构参考：[Directory Structure](reference/directory-structure.md)。
+
 ## 核心实体
 
 **Memory**：一条长期上下文，对应一个 Markdown 文件。

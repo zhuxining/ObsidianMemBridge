@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from membridge.domain.errors import ValidationError
-from membridge.vault.paths import make_vault_relative, vault_path_guard
+from membridge.models import ValidationError
+from membridge.utils.paths import make_vault_relative, vault_path_guard
 
 
 class TestVaultPathGuard:
@@ -24,7 +24,7 @@ class TestVaultPathGuard:
     def test_rejects_non_md(self, tmp_path: Path):
         vault = tmp_path
         (vault / "memories").mkdir()
-        with pytest.raises(ValidationError, match="Only .md"):
+        with pytest.raises(ValidationError, match=r"Only \.md"):
             vault_path_guard(vault, "notes/test.txt")
 
     def test_rejects_path_escape(self, tmp_path: Path):

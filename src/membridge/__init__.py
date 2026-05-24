@@ -1,6 +1,6 @@
 """MemBridge — Obsidian-based shared memory layer for agents."""
 
-from .config import Settings
-from .services.memory import MemoryService
+from .core import MemoryService, VaultInfo
+from .settings import Settings
 
-__all__ = ["MemoryService", "Settings"]
+__all__ = ["MemoryService", "Settings", "VaultInfo"]

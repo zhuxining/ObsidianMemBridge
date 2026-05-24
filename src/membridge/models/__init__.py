@@ -1,7 +1,10 @@
+"""Shared data contracts for MemBridge."""
+
 from .errors import MemBridgeError, NotFoundError, ValidationError
-from .models import MemoryDocument, MemoryFilter, MemoryFrontmatter
+from .memory import VALID_STATUSES, MemoryDocument, MemoryFilter, MemoryFrontmatter
 
 __all__ = [
+    "VALID_STATUSES",
     "MemBridgeError",
     "MemoryDocument",
     "MemoryFilter",

@@ -2,19 +2,23 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
+from pydantic import BaseModel
 import typer
 
-from .config import Settings
-from .domain.errors import MemBridgeError, ValidationError
-from .domain.models import MemoryFilter, MemoryFrontmatter
-from .services.memory import MemoryService
+from membridge.core import MemoryService
+from membridge.models import (
+    MemBridgeError,
+    MemoryDocument,
+    MemoryFilter,
+    MemoryFrontmatter,
+)
+from membridge.settings import Settings
 
 cli = typer.Typer(help="MemBridge — Obsidian memory management CLI", add_completion=False)
 
 
-def _service(vault_root: Optional[str] = None) -> MemoryService:
+def _service(vault_root: str | None = None) -> MemoryService:
     settings = Settings()
     if vault_root:
         settings.vault_root = Path(vault_root)
@@ -26,29 +30,28 @@ def _service(vault_root: Optional[str] = None) -> MemoryService:
 
 def _exit_ok(data: object, json_output: bool = False) -> None:
     if json_output:
-        if hasattr(data, "model_dump"):
-            print(json.dumps(data.model_dump(mode="json"), ensure_ascii=False, indent=2))
-        elif isinstance(data, list):
-            print(
-                json.dumps(
-                    [d.model_dump(mode="json") if hasattr(d, "model_dump") else d for d in data],
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-        else:
-            print(json.dumps(data, ensure_ascii=False, indent=2))
+        print(json.dumps(_jsonable(data), ensure_ascii=False, indent=2))
     else:
         _print_human(data)
 
 
-def _print_human(data: object) -> None:
-    from .domain.models import MemoryDocument
+def _jsonable(data: object) -> object:
+    if isinstance(data, BaseModel):
+        return data.model_dump(mode="json")
+    if isinstance(data, list):
+        return [_jsonable(item) for item in data]
+    return data
 
+
+def _print_human(data: object) -> None:
     if isinstance(data, MemoryDocument):
         _print_doc(data)
-    elif isinstance(data, list) and data and isinstance(data[0], MemoryDocument):
-        for doc in data:
+    elif isinstance(data, list) and data:
+        docs = [item for item in data if isinstance(item, MemoryDocument)]
+        if len(docs) != len(data):
+            typer.echo(data)
+            return
+        for doc in docs:
             _print_doc(doc)
             print("---")
     elif isinstance(data, dict):
@@ -93,7 +96,7 @@ def init(
         _exit_ok({"vault_root": str(info.root), "memories_dir": info.memories_dir}, json_output)
     except MemBridgeError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
 
 # -- read ---------------------------------------------------------------------
@@ -101,19 +104,19 @@ def init(
 
 @cli.command()
 def read(
-    path: Optional[str] = typer.Argument(None, help="Vault-relative path to a specific memory"),
-    status: Optional[str] = typer.Option(None, help="Filter by status"),
-    type: Optional[str] = typer.Option(None, help="Filter by type"),
-    scope: Optional[str] = typer.Option(None, help="Filter by scope"),
-    project: Optional[str] = typer.Option(None, help="Filter by project"),
-    source: Optional[str] = typer.Option(None, help="Filter by source"),
-    tag: Optional[list[str]] = typer.Option(None, "--tag", help="Filter by tag (repeatable)"),
-    vault_root: Optional[str] = typer.Option(None, help="Vault root path"),
+    path: str | None = typer.Argument(None, help="Vault-relative path to a specific memory"),
+    status: str | None = typer.Option(None, help="Filter by status"),
+    type: str | None = typer.Option(None, help="Filter by type"),
+    scope: str | None = typer.Option(None, help="Filter by scope"),
+    project: str | None = typer.Option(None, help="Filter by project"),
+    source: str | None = typer.Option(None, help="Filter by source"),
+    tag: list[str] | None = typer.Option(None, "--tag", help="Filter by tag (repeatable)"),
+    vault_root: str | None = typer.Option(None, help="Vault root path"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Read or query memories."""
     svc = _service(vault_root)
-    svc._require_store()  # ensure vault is initialized
+    svc._require_vault()
 
     try:
         if path:
@@ -134,7 +137,7 @@ def read(
             _exit_ok(docs, json_output)
     except MemBridgeError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
 
 # -- write --------------------------------------------------------------------
@@ -147,16 +150,16 @@ def write(
     type: str = typer.Option(..., help="Memory type"),
     source: str = typer.Option(..., help="Source identifier"),
     status: str = typer.Option("active", help="Memory status"),
-    scope: Optional[str] = typer.Option(None, help="Scope"),
-    project: Optional[str] = typer.Option(None, help="Project"),
-    tags: Optional[list[str]] = typer.Option(None, "--tag", help="Tags (repeatable)"),
-    path: Optional[str] = typer.Option(None, help="Vault-relative output path"),
-    vault_root: Optional[str] = typer.Option(None, help="Vault root path"),
+    scope: str | None = typer.Option(None, help="Scope"),
+    project: str | None = typer.Option(None, help="Project"),
+    tags: list[str] | None = typer.Option(None, "--tag", help="Tags (repeatable)"),
+    path: str | None = typer.Option(None, help="Vault-relative output path"),
+    vault_root: str | None = typer.Option(None, help="Vault root path"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Write a new memory."""
     svc = _service(vault_root)
-    svc._require_store()
+    svc._require_vault()
 
     frontmatter = MemoryFrontmatter(
         status=status,
@@ -172,7 +175,7 @@ def write(
         _exit_ok(doc, json_output)
     except MemBridgeError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
 
 # -- update -------------------------------------------------------------------
@@ -181,22 +184,22 @@ def write(
 @cli.command()
 def update(
     path: str = typer.Argument(..., help="Vault-relative path to the memory"),
-    content: Optional[str] = typer.Option(None, help="New body content"),
-    content_file: Optional[Path] = typer.Option(None, help="Read content from file"),
-    set: Optional[list[str]] = typer.Option(
+    content: str | None = typer.Option(None, help="New body content"),
+    content_file: Path | None = typer.Option(None, help="Read content from file"),
+    set: list[str] | None = typer.Option(
         None, "--set", help="Frontmatter patch as key=value (repeatable)"
     ),
-    vault_root: Optional[str] = typer.Option(None, help="Vault root path"),
+    vault_root: str | None = typer.Option(None, help="Vault root path"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Update an existing memory."""
     svc = _service(vault_root)
-    svc._require_store()
+    svc._require_vault()
 
     if content_file:
         content = content_file.read_text(encoding="utf-8")
 
-    patch: dict = {}
+    patch: dict[str, str] = {}
     if set:
         for item in set:
             if "=" not in item:
@@ -210,7 +213,7 @@ def update(
         _exit_ok(doc, json_output)
     except MemBridgeError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
 
 if __name__ == "__main__":

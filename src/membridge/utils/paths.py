@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ..domain.errors import ValidationError
+from membridge.models import ValidationError
 
 
 def vault_path_guard(vault_root: Path, path: str | Path) -> Path:

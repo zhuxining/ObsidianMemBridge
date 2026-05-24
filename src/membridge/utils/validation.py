@@ -1,7 +1,6 @@
 import re
 
-from .errors import ValidationError
-from .models import VALID_STATUSES
+from membridge.models import VALID_STATUSES, ValidationError
 
 REQUIRED_FRONTMATTER_KEYS = {"status", "type", "source", "created_at"}
 
@@ -26,7 +25,7 @@ def validate_frontmatter_required(data: dict[str, object]) -> None:
 def check_sensitive_keys(data: dict[str, object], path: str = "") -> list[str]:
     """Return a list of keys that look like secrets."""
     found: list[str] = []
-    for key, value in data.items():
+    for key, _ in data.items():
         if any(p.search(key) for p in SENSITIVE_PATTERNS):
             found.append(f"{path}.{key}" if path else key)
     return found

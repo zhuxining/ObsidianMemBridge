@@ -4,10 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from membridge.config import Settings
-from membridge.domain.errors import NotFoundError, ValidationError
-from membridge.domain.models import MemoryFilter, MemoryFrontmatter
-from membridge.services.memory import MemoryService
+from membridge.core import MemoryService
+from membridge.models import (
+    MemoryFilter,
+    MemoryFrontmatter,
+    NotFoundError,
+    ValidationError,
+)
+from membridge.settings import Settings
 
 
 @pytest.fixture()
@@ -80,7 +84,17 @@ class TestUpdate:
 
 
 class TestInit:
-    def test_init_requires_vault_root(self):
-        svc = MemoryService(Settings())
-        with pytest.raises(ValidationError, match="No vault_root"):
+    def test_init_requires_vault_root(self, tmp_path: Path):
+        settings = Settings()
+        svc = MemoryService(settings)
+        with pytest.raises(ValidationError, match="vault_root"):
             svc.init_vault()
+
+    def test_init_creates_memories_dir(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        settings = Settings(vault_root=vault, memories_dir="notes")
+        svc = MemoryService(settings)
+        info = svc.init_vault()
+        assert info.memories_dir == "notes"
+        assert (vault / "notes").is_dir()
