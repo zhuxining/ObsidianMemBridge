@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from obsidianmembridge.models import ValidationError
 from obsidianmembridge.utils.paths import make_vault_relative, vault_path_guard
-import pytest
 
 
 class TestVaultPathGuard:

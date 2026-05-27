@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+
 from obsidianmembridge.core import MemoryService
 from obsidianmembridge.models import MemoryFilter, MemoryFrontmatter
 from obsidianmembridge.settings import Settings

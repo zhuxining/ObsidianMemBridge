@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from obsidianmembridge.core import MemoryService
 from obsidianmembridge.models import (
     MemoryFilter,
@@ -10,7 +12,6 @@ from obsidianmembridge.models import (
     ValidationError,
 )
 from obsidianmembridge.settings import Settings
-import pytest
 
 
 @pytest.fixture()

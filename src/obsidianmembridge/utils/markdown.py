@@ -3,8 +3,9 @@
 import re
 from typing import Any
 
-from obsidianmembridge.models import NotFoundError, ValidationError
 import yaml
+
+from obsidianmembridge.models import NotFoundError, ValidationError
 
 FRONTMATTER_RE = re.compile(r"^---\n(?:([^\n].*?)\n)?---\n", re.DOTALL)
 

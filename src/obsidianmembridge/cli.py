@@ -3,6 +3,9 @@
 import json
 from pathlib import Path
 
+from pydantic import BaseModel
+import typer
+
 from obsidianmembridge.core import MemoryService
 from obsidianmembridge.models import (
     MemBridgeError,
@@ -11,8 +14,6 @@ from obsidianmembridge.models import (
     MemoryFrontmatter,
 )
 from obsidianmembridge.settings import Settings
-from pydantic import BaseModel
-import typer
 
 cli = typer.Typer(help="ObsidianMemBridge — Obsidian memory management CLI", add_completion=False)
 
