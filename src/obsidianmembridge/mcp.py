@@ -1,15 +1,14 @@
-"""MCP server — FastMCP tools for MemBridge."""
+"""MCP server — FastMCP tools for ObsidianMemBridge."""
 
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from obsidianmembridge.core import MemoryService
+from obsidianmembridge.models import MemoryFilter, MemoryFrontmatter
+from obsidianmembridge.settings import Settings
 
-from membridge.core import MemoryService
-from membridge.models import MemoryFilter, MemoryFrontmatter
-from membridge.settings import Settings
-
-mcp = FastMCP("MemBridge")
+mcp = FastMCP("ObsidianMemBridge")
 
 
 def _service() -> MemoryService:

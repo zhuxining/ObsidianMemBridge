@@ -1,12 +1,12 @@
 [project]
-name = "membridge"
+name = "obsidianmembridge"
 version = "0.1.0"
-description = "membridge is an Obsidian-based shared memory layer for agents, providing governed context retrieval, memory proposals, episodic summaries, and project state across Claude, OpenClaw, Pi, Codex, and other AI tools."
+description = "obsidianmembridge is an Obsidian-based shared memory layer for agents, providing governed context retrieval, memory proposals, episodic summaries, and project state across Claude, OpenClaw, Pi, Codex, and other AI tools."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "pyyaml>=6.0",
-    "typer>=0.25.1",
+    "typer>=0.26.1",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
     "loguru>=0.7.3",
@@ -14,21 +14,21 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ty>=0.0.39", "ruff>=0.15.14", "pytest-asyncio>=1.3.0", "pytest>=9.0.3"]
+dev = ["ty>=0.0.39", "ruff>=0.15.14", "pytest-asyncio>=1.4.0", "pytest>=9.0.3"]
 
 [[tool.uv.index]]
 url = "http://mirrors.aliyun.com/pypi/simple/"
 default = true
 
 [project.scripts]
-meb = "membridge.cli:cli"
+meb = "obsidianmembridge.cli:cli"
 
 [build-system]
 requires = ["uv_build>=0.10.8,<0.11.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "membridge"
+module-name = "obsidianmembridge"
 
 # Ruff
 [tool.ruff]

@@ -4,11 +4,11 @@ This file provides guidance to Code Agents (claude.ai/code、codex、pi、openco
 
 ## Project Overview
 
-`membridge` is an Obsidian-based shared memory layer for agents, providing governed context retrieval, memory proposals, episodic summaries, and project state across Claude, OpenClaw, Pi, Codex, and other AI tools.
+`obsidianmembridge` is an Obsidian-based shared memory layer for agents, providing governed context retrieval, memory proposals, episodic summaries, and project state across Claude, OpenClaw, Pi, Codex, and other AI tools.
 
 - Python 3.14, managed with **uv**
-- Src layout: source in `src/membridge/` (built as wheel package via `uv_build`)
-- Entry point: `src/membridge/cli.py` → `cli()` (registered as `meb` command via `project.scripts`)
+- Src layout: source in `src/obsidianmembridge/` (built as wheel package via `uv_build`)
+- Entry point: `src/obsidianmembridge/cli.py` → `cli()` (registered as `meb` command via `project.scripts`)
 
 ## Commands
 

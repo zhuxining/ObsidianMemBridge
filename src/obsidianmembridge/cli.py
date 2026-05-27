@@ -1,21 +1,20 @@
-"""CLI entrypoint — Typer app for MemBridge."""
+"""CLI entrypoint — Typer app for ObsidianMemBridge."""
 
 import json
 from pathlib import Path
 
-from pydantic import BaseModel
-import typer
-
-from membridge.core import MemoryService
-from membridge.models import (
+from obsidianmembridge.core import MemoryService
+from obsidianmembridge.models import (
     MemBridgeError,
     MemoryDocument,
     MemoryFilter,
     MemoryFrontmatter,
 )
-from membridge.settings import Settings
+from obsidianmembridge.settings import Settings
+from pydantic import BaseModel
+import typer
 
-cli = typer.Typer(help="MemBridge — Obsidian memory management CLI", add_completion=False)
+cli = typer.Typer(help="ObsidianMemBridge — Obsidian memory management CLI", add_completion=False)
 
 
 def _service(vault_root: str | None = None) -> MemoryService:
@@ -88,7 +87,7 @@ def init(
     memories_dir: str = typer.Option("memories", help="Memories subdirectory name"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
-    """Initialize MemBridge against an Obsidian vault."""
+    """Initialize ObsidianMemBridge against an Obsidian vault."""
     settings = Settings(vault_root=Path(vault_root), memories_dir=memories_dir)
     svc = MemoryService(settings)
     try:

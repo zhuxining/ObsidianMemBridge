@@ -1,4 +1,4 @@
-"""MemBridge — Obsidian-based shared memory layer for agents."""
+"""ObsidianMemBridge — Obsidian-based shared memory layer for agents."""
 
 from .core import MemoryService, VaultInfo
 from .settings import Settings

@@ -1,10 +1,10 @@
 > **Status**: `active`
 
-# MemBridge PRD Overview
+# ObsidianMemBridge PRD Overview
 
 ## 产品定位
 
-MemBridge 为本地 Agent 工作流提供基于 Obsidian 的记忆层。核心能力：让 Agent 读写 Obsidian Markdown 文件，并按 Frontmatter 元数据过滤查询。
+ObsidianMemBridge 为本地 Agent 工作流提供基于 Obsidian 的记忆层。核心能力：让 Agent 读写 Obsidian Markdown 文件，并按 Frontmatter 元数据过滤查询。
 
 In Scope：
 

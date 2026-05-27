@@ -2,16 +2,15 @@
 
 from pathlib import Path
 
-import pytest
-
-from membridge.core import MemoryService
-from membridge.models import (
+from obsidianmembridge.core import MemoryService
+from obsidianmembridge.models import (
     MemoryFilter,
     MemoryFrontmatter,
     NotFoundError,
     ValidationError,
 )
-from membridge.settings import Settings
+from obsidianmembridge.settings import Settings
+import pytest
 
 
 @pytest.fixture()

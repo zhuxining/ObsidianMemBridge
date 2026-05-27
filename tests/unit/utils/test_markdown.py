@@ -1,6 +1,6 @@
 """Unit tests for markdown parsing and serialization."""
 
-from membridge.utils.markdown import parse_markdown, serialize_markdown
+from obsidianmembridge.utils.markdown import parse_markdown, serialize_markdown
 
 
 class TestParseMarkdown:

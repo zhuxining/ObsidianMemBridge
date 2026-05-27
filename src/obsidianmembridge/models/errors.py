@@ -1,5 +1,5 @@
 class MemBridgeError(Exception):
-    """Base exception for MemBridge."""
+    """Base exception for ObsidianMemBridge."""
 
 
 class ValidationError(MemBridgeError):

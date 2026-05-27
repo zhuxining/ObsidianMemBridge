@@ -1,10 +1,10 @@
 > **Status**: `active`
 
-# MemBridge Architecture Overview
+# ObsidianMemBridge Architecture Overview
 
 ## 系统目标
 
-MemBridge 是一个本地优先的 Obsidian 记忆层，为 Agent 提供统一的 Markdown 读写和 Frontmatter 过滤查询能力。
+ObsidianMemBridge 是一个本地优先的 Obsidian 记忆层，为 Agent 提供统一的 Markdown 读写和 Frontmatter 过滤查询能力。
 
 核心约束：
 
@@ -29,7 +29,7 @@ Agent Clients / Scripts
 MCP Server        CLI
         \          /
          v        v
-       MemBridge Core
+       ObsidianMemBridge Core
               |
               v
        Obsidian Vault Adapter
@@ -38,7 +38,7 @@ MCP Server        CLI
 
 - **MCP Server**：向 Agent 暴露 read_memories / write_memory 工具。
 - **CLI**：本地调试、批量导入、自动化脚本入口。
-- **MemBridge Core**：Frontmatter 校验、文件读写、过滤查询。
+- **ObsidianMemBridge Core**：Frontmatter 校验、文件读写、过滤查询。
 - **Obsidian Vault Adapter**：Markdown 读写和 Frontmatter 解析。
 
 目录结构参考：[Directory Structure](reference/directory-structure.md)。

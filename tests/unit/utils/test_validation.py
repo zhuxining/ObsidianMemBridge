@@ -2,10 +2,9 @@
 
 from datetime import UTC, datetime
 
+from obsidianmembridge.models import ValidationError
+from obsidianmembridge.utils.validation import check_sensitive_keys, validate_frontmatter_required
 import pytest
-
-from membridge.models import ValidationError
-from membridge.utils.validation import check_sensitive_keys, validate_frontmatter_required
 
 
 class TestValidateFrontmatterRequired:

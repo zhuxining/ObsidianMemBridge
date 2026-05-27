@@ -1,6 +1,6 @@
 import re
 
-from membridge.models import VALID_STATUSES, ValidationError
+from obsidianmembridge.models import VALID_STATUSES, ValidationError
 
 REQUIRED_FRONTMATTER_KEYS = {"status", "type", "source", "created_at"}
 

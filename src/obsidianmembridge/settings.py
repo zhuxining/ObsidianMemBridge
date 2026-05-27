@@ -1,4 +1,4 @@
-"""Configuration for MemBridge."""
+"""Configuration for ObsidianMemBridge."""
 
 from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Shared data contracts for MemBridge."""
+"""Shared data contracts for ObsidianMemBridge."""
 
 from .errors import MemBridgeError, NotFoundError, ValidationError
 from .memory import VALID_STATUSES, MemoryDocument, MemoryFilter, MemoryFrontmatter

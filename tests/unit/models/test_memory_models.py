@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from membridge.models import (
+from obsidianmembridge.models import (
     MemBridgeError,
     MemoryFilter,
     MemoryFrontmatter,

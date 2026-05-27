@@ -6,7 +6,7 @@
 
 ## 背景
 
-用户同时使用多个 Agent 时，项目背景、偏好和决策分散在不同会话中。MemBridge MVP 提供基于 Obsidian 的共享记忆入口：Agent 通过 Markdown 文件读写记忆，通过 Frontmatter 过滤查询。
+用户同时使用多个 Agent 时，项目背景、偏好和决策分散在不同会话中。ObsidianMemBridge MVP 提供基于 Obsidian 的共享记忆入口：Agent 通过 Markdown 文件读写记忆，通过 Frontmatter 过滤查询。
 
 ## 功能描述
 
@@ -61,13 +61,13 @@
 
 验收标准：
 
-- Given 用户执行 `membridge read --type fact --status active`
+- Given 用户执行 `obsidianmembridge read --type fact --status active`
   When 命令执行完成
   Then 输出匹配的 Markdown 文件列表及其 Frontmatter 元数据
-- Given 用户执行 `membridge write --title "..." --content "..." --type fact --project membridge`
+- Given 用户执行 `obsidianmembridge write --title "..." --content "..." --type fact --project obsidianmembridge`
   When 命令执行完成
   Then Vault 中新增对应的 Markdown 文件
-- Given 用户执行 `membridge init /path/to/vault`
+- Given 用户执行 `obsidianmembridge init /path/to/vault`
   When 命令执行完成
   Then Vault 目录结构（记忆目录、配置文件、Frontmatter schema 说明）已创建
 

@@ -13,7 +13,7 @@
 │   │       └── directory-structure.md
 │   └── prd/
 ├── src/
-│   └── membridge/
+│   └── obsidianmembridge/
 │       ├── commands/
 │       ├── models/
 │       ├── services/
@@ -29,17 +29,17 @@
 
 | 路径 | 职责 | 禁止内容 |
 |------|------|----------|
-| `src/membridge/commands/` | 外部入口编排，包括 Typer CLI 和 FastMCP 工具；负责参数映射、输出格式和调用服务 | 文件系统细节、Frontmatter 核心校验、业务规则 |
-| `src/membridge/models/` | 共享数据契约，包括记忆模型、查询过滤模型、配置对象和错误类型 | 文件读写、命令输出、服务编排、通用校验函数 |
-| `src/membridge/services/` | 应用服务层，承接 CLI/MCP 请求并编排模型、校验工具和 `utils` | CLI 参数解析、MCP 协议细节、Markdown 序列化细节 |
-| `src/membridge/utils/` | 通用支撑能力，包括标题 slug、正文摘要、Frontmatter 校验、Vault 文件工具和安全检测 | 命令入口、服务编排、共享数据模型 |
-| `src/membridge/cli.py`、`src/membridge/mcp.py`、`src/membridge/config.py` | 兼容旧导入路径的薄转发文件 | 新功能实现 |
+| `src/obsidianmembridge/commands/` | 外部入口编排，包括 Typer CLI 和 FastMCP 工具；负责参数映射、输出格式和调用服务 | 文件系统细节、Frontmatter 核心校验、业务规则 |
+| `src/obsidianmembridge/models/` | 共享数据契约，包括记忆模型、查询过滤模型、配置对象和错误类型 | 文件读写、命令输出、服务编排、通用校验函数 |
+| `src/obsidianmembridge/services/` | 应用服务层，承接 CLI/MCP 请求并编排模型、校验工具和 `utils` | CLI 参数解析、MCP 协议细节、Markdown 序列化细节 |
+| `src/obsidianmembridge/utils/` | 通用支撑能力，包括标题 slug、正文摘要、Frontmatter 校验、Vault 文件工具和安全检测 | 命令入口、服务编排、共享数据模型 |
+| `src/obsidianmembridge/cli.py`、`src/obsidianmembridge/mcp.py`、`src/obsidianmembridge/config.py` | 兼容旧导入路径的薄转发文件 | 新功能实现 |
 
 ## 入口文件
 
-- CLI 主入口：`src/membridge/commands/cli.py`，由 `pyproject.toml` 的 `meb = "membridge.commands.cli:cli"` 启动。
-- MCP 主入口：`src/membridge/commands/mcp.py`，导出 `mcp` 和三个工具函数。
-- 兼容入口：`src/membridge/cli.py`、`src/membridge/mcp.py`、`src/membridge/config.py` 只做 re-export，避免旧导入路径立即失效。
+- CLI 主入口：`src/obsidianmembridge/commands/cli.py`，由 `pyproject.toml` 的 `meb = "obsidianmembridge.commands.cli:cli"` 启动。
+- MCP 主入口：`src/obsidianmembridge/commands/mcp.py`，导出 `mcp` 和三个工具函数。
+- 兼容入口：`src/obsidianmembridge/cli.py`、`src/obsidianmembridge/mcp.py`、`src/obsidianmembridge/config.py` 只做 re-export，避免旧导入路径立即失效。
 
 ## 依赖方向
 

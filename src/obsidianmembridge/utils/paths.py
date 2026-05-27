@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from membridge.models import ValidationError
+from obsidianmembridge.models import ValidationError
 
 
 def vault_path_guard(vault_root: Path, path: str | Path) -> Path:

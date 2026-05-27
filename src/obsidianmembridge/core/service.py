@@ -4,18 +4,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from membridge.models import (
+from obsidianmembridge.models import (
     MemoryDocument,
     MemoryFilter,
     MemoryFrontmatter,
     ValidationError,
 )
-from membridge.settings import Settings
-from membridge.utils.markdown import read_file_markdown, write_file_markdown
-from membridge.utils.paths import list_md_files, make_vault_relative, vault_path_guard
-from membridge.utils.slug import slugify
-from membridge.utils.text import summarize
-from membridge.utils.validation import check_sensitive_keys, validate_frontmatter_required
+from obsidianmembridge.settings import Settings
+from obsidianmembridge.utils.markdown import read_file_markdown, write_file_markdown
+from obsidianmembridge.utils.paths import list_md_files, make_vault_relative, vault_path_guard
+from obsidianmembridge.utils.slug import slugify
+from obsidianmembridge.utils.text import summarize
+from obsidianmembridge.utils.validation import check_sensitive_keys, validate_frontmatter_required
 
 
 class VaultInfo:
