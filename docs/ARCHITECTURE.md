@@ -35,7 +35,7 @@ LanceDB 的本地构建需要 `protoc`，CI 与开发环境应预装并通过 `P
 | 格式化 | dprint-plugin-markdown | 检查、显式修复、安全写回 |
 | CLI / MCP | clap / 官方 MCP SDK | 参数、协议、序列化；MCP SDK 由 mcp feature 隔离 |
 | 异步 / 错误 | tokio / thiserror + anyhow | 生命周期与系统边界上下文 |
-| 路径 / 指纹 / 锁 | camino / sha2 / fs2 | UTF-8 路径、变更确认、跨进程写协调 |
+| 路径 / 指纹 / 锁 | camino / sha2 / fs2 | UTF-8 路径、变更确认、跨进程共享读/独占写协调 |
 
 LanceDB 承接 FTS、向量查询、过滤与原生 RRF；当前 FTS 使用 Lance 默认 tokenizer，不在应用层自建分词器或通用融合算法。中文专名、混合文本和代码标识符的效果必须用固定语料实测，不能由组件支持本身推断召回质量。[FTS 配置](https://docs.rs/lancedb/latest/lancedb/index/scalar/struct.FtsIndexBuilder.html)、[RRF](https://docs.rs/lancedb/latest/lancedb/rerankers/rrf/struct.RRFReranker.html)
 
@@ -180,15 +180,18 @@ Wiki 根目录的 `AGENTWIKI.md` 是唯一组织规则入口：Frontmatter 是�
 3. 变化内容解析一次，供片段、元数据、关系和校验复用。解析失败保留该文档已有有效投影，记录路径和错误；不得将读取失败当成文件删除。读取前后核对 mtime 和大小，确认拿到一致快照，并限制单文档大小。
 4. 唯一内容哈希配对的删除与新增识别为移动，保留文档身份；有歧义则按增删处理。
 5. 更新关键词、文档信息和关系；向量按 `vector_input_hash` 逐切片复用，只对输入真正变化的切片按固定批次同步推理。哈希包含模型身份、维度和实际嵌入输入，任一变化都使旧向量失效。
-6. 每个文档的 document、fragment、relation 行通过一次 `merge_insert` 提交；语义失败仍提交词法字段、记录 `vector_input_hash` 并将向量留空，下次同步重新构造该文档投影并重试向量。
+6. 成功解析的文档同时按固定路径数和投影行数组成有界批次，超过行数上限的单篇文档独占一批；一个 `merge_insert` 接收批内多个 Arrow `RecordBatch`，删除条件严格限定为批内 `path IN (...)`，不会删除未参与路径。内容未变的指纹按有界批次由一个 update builder 依路径更新 mtime 和 document 行大小，删除也按有界路径批次提交。空批次不写入，提交前验证向量维度、有限值和 source `chunk_id` 唯一性。
+7. 单文档扫描、读取、解析和 embedding 失败仍隔离；语义失败可提交词法字段、记录 `vector_input_hash` 并将向量留空。replacement、touch、delete 只有在对应批次提交成功后才确认 indexed、unchanged、removed、moved 和向量 ready/reused；失败逐路径进入 degraded，后续批次继续，下次同步可重试。
 
 读写规则查询也确认文档投影新鲜度，但不触发 embedding 推理：规则只需要最新的标签与文档元数据，向量留给下一次检索补偿。模型在首次实际需要推理时才加载，未启用或未使用的进程不准备推理资源。
 
-LanceDB 统一保存 document/fragment、结构化过滤字段、显式关系和同步指纹；单文档通过 `merge_insert` 一次提交，查询统一针对当前 `wiki_rows` 表。写操作由 fs2 跨进程锁协调，部分完成操作必须幂等重试。
+LanceDB 统一保存 document/fragment、结构化过滤字段、显式关系和同步指纹，查询统一针对当前 `wiki_rows` 表。同步、重建、维护和版本清理持有 fs2 跨进程独占锁；投影查询与动态标签读取在刷新完成后持有共享锁直至 Lance 读取结束。批次部分完成必须幂等重试。
 
 不维护后台向量队列、watcher、pending 恢复或独立向量 manifest。首次和变更查询允许等待同步向量批处理；计算失败报告降级，进程退出后通过哈希与失败记录再次同步。
 
 外部修改走增量路径，rebuild 和索引恢复才全量重建。投影格式不兼容时在锁内重建 `wiki_rows`，不进行文档数据迁移。索引在进程打开投影时核对并补齐，中断的建索引可重试；新增行不自动进入既有索引，查询仍会合并已索引和未索引数据，因此结果不会因未 optimize 而缺失。把新增行并入索引是显式维护动作：`rebuild-index` 在重建后执行，或由 `optimize-index` 单独触发，查询路径不隐式 optimize。未并入索引的数据仍须可查，不能为速度隐式返回过期结果。[索引更新机制](https://docs.lancedb.com/search/full-text-search)
+
+Markdown 是历史与恢复的唯一事实源，AgentWiki 不提供 Lance 版本查询或回滚。投影打开后的首次同步以及产生成功写入的同步，在全部批量写入和索引维护之后、仍持独占锁时最多执行一次官方 `OptimizeAction::Prune`；清理失败在下次同步重试，无待清理写入的查询不重复扫描数据集。Prune 使用零保留期、删除未验证旧文件并拒绝遗留 tagged 旧版本，只保留当前可读版本；显式 `optimize-index` 同样在索引维护后 prune。这里不使用会额外触发压缩和索引优化的 `OptimizeAction::All`。共享读锁保证零保留清理不会与任何 AgentWiki Lance 读取并发。
 
 ### 4.3 检索与证据
 
@@ -250,13 +253,13 @@ document_limit 默认 5，fragment_limit 默认 10，范围均为 1..20。关系
 
 功能域目录与异步资源边界已经落地；后续只针对模型缓存策略和检索质量做增量演进。规则示例与代码内精简模板用途不同，默认模板不直接替换成完整示例。
 
-CLI 维护入口：`sync-index` 增量同步，`rebuild-index` 全量重建并刷新索引，`optimize-index` 只把新增行并入既有索引。查询路径不执行 optimize。
+CLI 维护入口：`sync-index` 增量同步，`rebuild-index` 全量重建并刷新索引，`optimize-index` 把新增行并入既有索引并清理旧 Lance 版本。查询路径不执行索引 optimize。
 
 验收场景：
 
 - 中文专名、中英混合、代码标识符、精确路径、语义改写、过滤、近期及无答案查询；同时报告文档与章节召回，比较关键词和混合基线。
 - scope 含 `_`、`%` 等字符时只匹配字面路径；`keywords` 的 any/all 约束不被 query 或语义候选绕过；`modified_desc` 返回全部匹配项中最新的结果；match_sources 反映每条结果实际参与的检索腿。
-- 增改删移、重复哈希移动歧义、mtime 抖动、未变化免解析、同内容只改 mtime 后文档与片段时间一致、单篇解析失败、部分投影失败重试、模型切换与不可用、向量按输入哈希复用、跨进程同步、中断的建索引重试和投影版本不兼容重建。
+- 增改删移、重复哈希移动歧义、mtime 抖动、未变化免解析、同内容只改 mtime 后文档与片段时间一致、多文档有界批量 replacement/touch/delete、单篇解析失败、批次投影失败逐路径重试、模型切换与不可用、向量按输入哈希复用、跨进程共享读/独占写、中断的建索引重试、旧版本 prune 后仅当前版本可读和投影版本不兼容重建。
 - 默认校验不写文件；格式化幂等；Frontmatter、代码块和链接语义保持；冲突不覆盖，路径越界拒绝，修复后重新校验。
 - CLI/MCP 使用相同默认值和业务入口；核心库无需 mcp feature，MCP 入口单独编译验证。
 - 在固定语料记录构建、启动、增量同步、查询延迟、内存与召回。明确设备、模型、文档数和片段数，不承诺未经测量的性能。

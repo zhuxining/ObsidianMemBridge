@@ -22,7 +22,7 @@ use lancedb::query::{ColumnOrdering, ExecutableQuery, QueryBase, Select};
 use lancedb::rerankers::{Reranker, rrf::RRFReranker};
 use lancedb::{Table, connect};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 mod lifecycle;
@@ -32,11 +32,21 @@ const DIMS: usize = 512;
 
 /// Derived-projection format identity. Bumping it forces a rebuild of `wiki_rows`.
 pub(super) const PROJECTION_VERSION_KEY: &str = "agentwiki_projection_version";
-pub(super) const PROJECTION_VERSION: &str = "3";
+pub(super) const PROJECTION_VERSION: &str = "4";
 
 pub struct LanceIndex {
     table: Table,
     vector_dims: Option<usize>,
+}
+
+/// Owned input for atomically replacing the rows of several source documents.
+pub(crate) struct DocumentReplacement {
+    pub path: PathScope,
+    pub slices: Vec<Slice>,
+    pub edges: Vec<Edge>,
+    pub vectors: Vec<Option<Vec<f32>>>,
+    pub fingerprint: Fingerprint,
+    pub embedding_identity: Option<String>,
 }
 
 impl LanceIndex {
@@ -126,35 +136,118 @@ impl LanceIndex {
         Ok(out)
     }
 
-    /// Refresh the observed file stamp when the content is unchanged.
+    /// Refresh observed file stamps for several unchanged documents in one commit.
     ///
-    /// Every row owned by the path carries the real file mtime so document and
+    /// Every row owned by a path carries the real file mtime so document and
     /// fragment time filters agree; only the document row carries `source_size`.
-    pub async fn update_document_fingerprint(
+    pub async fn update_document_fingerprints(
         &self,
-        path: &PathScope,
-        fingerprint: &Fingerprint,
+        updates: &[(PathScope, Fingerprint)],
     ) -> Result<()> {
-        let escaped = sql_string(path.0.as_str());
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let paths = sql_paths(updates.iter().map(|(path, _)| path));
+        // This is a path-discriminated CASE encoded arithmetically because
+        // LanceDB 0.39's update expression parser rejects SQL CASE syntax.
+        let modified = updates
+            .iter()
+            .map(|(path, fingerprint)| {
+                format!(
+                    "CAST(path = '{}' AS BIGINT) * {}",
+                    sql_string(path.0.as_str()),
+                    fingerprint.mtime_ns
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let sizes = updates.iter().fold(
+            "source_size".to_owned(),
+            |expression, (path, fingerprint)| {
+                format!(
+                    "{expression} + CAST(unit_kind = 'document' AND path = '{}' AS BIGINT) * ({} - source_size)",
+                    sql_string(path.0.as_str()),
+                    fingerprint.size as i64
+                )
+            },
+        );
         self.table
             .update()
-            .only_if(format!("path = '{escaped}'"))
-            .column("modified_at_ns", fingerprint.mtime_ns.to_string())
-            .execute()
-            .await
-            .map_err(index_err)?;
-        self.table
-            .update()
-            .only_if(format!("unit_kind = 'document' AND path = '{escaped}'"))
-            .column("source_size", (fingerprint.size as i64).to_string())
+            .only_if(format!("path IN ({paths})"))
+            .column("modified_at_ns", modified)
+            .column("source_size", sizes)
             .execute()
             .await
             .map(|_| ())
             .map_err(index_err)
     }
 
-    /// Replace every derived row owned by one Markdown file in one Lance commit.
-    pub async fn replace_document(
+    /// Replace all rows owned by a bounded set of Markdown files in one commit.
+    pub async fn replace_documents(&self, replacements: &[DocumentReplacement]) -> Result<()> {
+        if replacements.is_empty() {
+            return Ok(());
+        }
+        let mut source_ids = HashSet::new();
+        let mut source_paths = HashSet::new();
+        for replacement in replacements {
+            if !source_paths.insert(replacement.path.0.as_str()) {
+                return Err(AgentWikiError::Index(format!(
+                    "duplicate replacement path: {}",
+                    replacement.path.0
+                )));
+            }
+            if replacement.vectors.len() != replacement.slices.len()
+                || replacement.vectors.iter().flatten().any(|vector| {
+                    Some(vector.len()) != self.vector_dims
+                        || vector.iter().any(|value| !value.is_finite())
+                })
+            {
+                return Err(AgentWikiError::Embedding(
+                    "vector dimensions do not match index schema".into(),
+                ));
+            }
+            for chunk_id in replacement
+                .slices
+                .iter()
+                .map(|slice| slice.chunk_id.clone())
+                .chain(replacement.edges.iter().map(relation_chunk_id))
+            {
+                if !source_ids.insert(chunk_id.clone()) {
+                    return Err(AgentWikiError::Index(format!(
+                        "duplicate source chunk_id: {chunk_id}"
+                    )));
+                }
+            }
+        }
+        let batches = replacements
+            .iter()
+            .map(|replacement| {
+                unified_batch(
+                    &replacement.path,
+                    &replacement.slices,
+                    &replacement.edges,
+                    &replacement.vectors,
+                    &replacement.fingerprint,
+                    replacement.embedding_identity.as_deref(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(
+                batches.into_iter().map(Ok),
+                unified_schema(self.vector_dims),
+            ));
+        let paths = sql_paths(replacements.iter().map(|replacement| &replacement.path));
+        let mut merge = self.table.merge_insert(&["chunk_id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge.when_not_matched_by_source_delete(Some(format!("path IN ({paths})")));
+        merge.execute(reader).await.map_err(index_err)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn replace_document(
         &self,
         path: &PathScope,
         slices: &[Slice],
@@ -163,36 +256,15 @@ impl LanceIndex {
         fingerprint: &Fingerprint,
         embedding_identity: Option<&str>,
     ) -> Result<()> {
-        if vectors.len() != slices.len()
-            || vectors
-                .iter()
-                .flatten()
-                .any(|v| Some(v.len()) != self.vector_dims || v.iter().any(|x| !x.is_finite()))
-        {
-            return Err(AgentWikiError::Embedding(
-                "vector dimensions do not match index schema".into(),
-            ));
-        }
-        let batch = unified_batch(
-            path,
-            slices,
-            edges,
-            vectors,
-            fingerprint,
-            embedding_identity,
-        )?;
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(
-                vec![Ok(batch)].into_iter(),
-                unified_schema(self.vector_dims),
-            ));
-        let escaped = sql_string(path.0.as_str());
-        let mut merge = self.table.merge_insert(&["chunk_id"]);
-        merge.when_matched_update_all(None);
-        merge.when_not_matched_insert_all();
-        merge.when_not_matched_by_source_delete(Some(format!("path = '{escaped}'")));
-        merge.execute(reader).await.map_err(index_err)?;
-        Ok(())
+        self.replace_documents(&[DocumentReplacement {
+            path: path.clone(),
+            slices: slices.to_vec(),
+            edges: edges.to_vec(),
+            vectors: vectors.to_vec(),
+            fingerprint: fingerprint.clone(),
+            embedding_identity: embedding_identity.map(str::to_owned),
+        }])
+        .await
     }
 
     /// Repair missing indices and optionally fold new rows into existing ones.
@@ -252,11 +324,28 @@ impl LanceIndex {
         Ok(out)
     }
 
-    pub async fn delete_path(&self, path: &PathScope) -> Result<()> {
+    pub async fn delete_paths(&self, paths: &[PathScope]) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
         self.table
-            .delete(&format!("path = '{}'", sql_string(path.0.as_str())))
+            .delete(&format!("path IN ({})", sql_paths(paths.iter())))
             .await
             .map(|_| ())
+            .map_err(index_err)
+    }
+
+    pub async fn has_old_versions(&self) -> Result<bool> {
+        self.table
+            .list_versions()
+            .await
+            .map(|versions| versions.len() > 1)
+            .map_err(index_err)
+    }
+
+    pub async fn prune_versions(&self) -> Result<()> {
+        lifecycle::prune_versions(&self.table)
+            .await
             .map_err(index_err)
     }
 
@@ -576,6 +665,12 @@ fn index_err(e: impl std::fmt::Display) -> AgentWikiError {
 }
 fn sql_string(s: &str) -> String {
     s.replace('\'', "''")
+}
+fn sql_paths<'a>(paths: impl Iterator<Item = &'a PathScope>) -> String {
+    paths
+        .map(|path| format!("'{}'", sql_string(path.0.as_str())))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 fn normalize_lookup(s: &str) -> String {
     s.trim().to_lowercase()
@@ -983,9 +1078,7 @@ fn unified_batch(
     }
     for edge in edges {
         paths.append_value(path.0.as_str());
-        ids.append_value(hex::encode(Sha256::digest(
-            format!("{}\0{}\0{}", edge.from.0, edge.relation_type, edge.to.0).as_bytes(),
-        )));
+        ids.append_value(relation_chunk_id(edge));
         kinds.append_value("relation");
         types.append_value("");
         add_list(&mut tags, &[]);
@@ -1031,6 +1124,16 @@ fn unified_batch(
         ],
     )
     .map_err(|e| AgentWikiError::Index(e.to_string()))
+}
+
+fn relation_chunk_id(edge: &Edge) -> String {
+    hex::encode(Sha256::digest(
+        format!(
+            "{}\0{}\0{}\0{}",
+            edge.from.0, edge.relation_type, edge.to.0, edge.section_source
+        )
+        .as_bytes(),
+    ))
 }
 
 pub(super) fn embedding_input_hash(identity: Option<&str>, input: &str) -> String {
@@ -1097,29 +1200,190 @@ mod tests {
         vector
     }
 
+    fn replacement(path: &str, search_text: &str) -> DocumentReplacement {
+        DocumentReplacement {
+            path: PathScope(path.into()),
+            slices: vec![document_slice(
+                path,
+                &format!("{path}#{search_text}"),
+                search_text,
+            )],
+            edges: Vec::new(),
+            vectors: vec![Some(unit_vector(0))],
+            fingerprint: Fingerprint {
+                content_hash: format!("hash-{path}"),
+                mtime_ns: 7,
+                size: 1,
+            },
+            embedding_identity: Some("test-model".into()),
+        }
+    }
+
     async fn index_with(dir: &tempfile::TempDir, rows: &[(&str, &str)]) -> LanceIndex {
         let index = LanceIndex::open(camino::Utf8Path::from_path(dir.path()).unwrap(), Some(DIMS))
             .await
             .unwrap();
         for (path, search_text) in rows {
-            let slice = document_slice(path, &format!("{path}#{search_text}"), search_text);
+            let replacement = replacement(path, search_text);
             index
                 .replace_document(
-                    &PathScope((*path).into()),
-                    std::slice::from_ref(&slice),
-                    &[],
-                    &[Some(unit_vector(0))],
-                    &Fingerprint {
-                        content_hash: format!("hash-{path}"),
-                        mtime_ns: 7,
-                        size: 1,
-                    },
-                    Some("test-model"),
+                    &replacement.path,
+                    &replacement.slices,
+                    &replacement.edges,
+                    &replacement.vectors,
+                    &replacement.fingerprint,
+                    replacement.embedding_identity.as_deref(),
                 )
                 .await
                 .unwrap();
         }
         index
+    }
+
+    #[tokio::test]
+    async fn replacement_batches_are_scoped_to_participating_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = index_with(
+            &dir,
+            &[
+                ("a.md", "old alpha"),
+                ("b.md", "old beta"),
+                ("c.md", "keep gamma"),
+            ],
+        )
+        .await;
+        let before = index.table.version().await.unwrap();
+        index
+            .replace_documents(&[
+                replacement("a.md", "new alpha"),
+                replacement("b.md", "new beta"),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(index.table.version().await.unwrap(), before + 1);
+        assert_eq!(
+            index.slices_for_path("a.md").await.unwrap()[0]
+                .slice
+                .content,
+            "new alpha"
+        );
+        assert_eq!(
+            index.slices_for_path("b.md").await.unwrap()[0]
+                .slice
+                .content,
+            "new beta"
+        );
+        assert_eq!(
+            index.slices_for_path("c.md").await.unwrap()[0]
+                .slice
+                .content,
+            "keep gamma"
+        );
+        assert_eq!(index.document_fingerprints().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn replacement_accepts_same_relation_from_different_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = index_with(&dir, &[("target.md", "target")]).await;
+        let mut source = replacement("source.md", "source");
+        source.edges = ["First", "Second"]
+            .into_iter()
+            .map(|section| Edge {
+                from: source.path.clone(),
+                to: PathScope("target.md".into()),
+                relation_type: "related".into(),
+                section_source: section.into(),
+                status: EdgeStatus::Unresolved,
+            })
+            .collect();
+
+        index.replace_documents(&[source]).await.unwrap();
+
+        let relations = index.relations_for_path("source.md").await.unwrap();
+        assert_eq!(relations.len(), 2);
+        assert_eq!(
+            relations
+                .iter()
+                .map(|edge| edge.section_source.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["First", "Second"])
+        );
+    }
+
+    #[tokio::test]
+    async fn fingerprint_touches_use_path_specific_values_in_one_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = index_with(&dir, &[("a.md", "alpha"), ("b.md", "beta")]).await;
+        let before = index.table.version().await.unwrap();
+        index
+            .update_document_fingerprints(&[
+                (
+                    PathScope("a.md".into()),
+                    Fingerprint {
+                        content_hash: "ignored-a".into(),
+                        mtime_ns: 11,
+                        size: 101,
+                    },
+                ),
+                (
+                    PathScope("b.md".into()),
+                    Fingerprint {
+                        content_hash: "ignored-b".into(),
+                        mtime_ns: 22,
+                        size: 202,
+                    },
+                ),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(index.table.version().await.unwrap(), before + 1);
+        let fingerprints = index.document_fingerprints().await.unwrap();
+        assert_eq!(
+            (fingerprints["a.md"].mtime_ns, fingerprints["a.md"].size),
+            (11, 101)
+        );
+        assert_eq!(
+            (fingerprints["b.md"].mtime_ns, fingerprints["b.md"].size),
+            (22, 202)
+        );
+        assert_eq!(fingerprints["a.md"].content_hash, "hash-a.md");
+    }
+
+    #[tokio::test]
+    async fn delete_paths_removes_a_batch_in_one_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = index_with(
+            &dir,
+            &[("a.md", "alpha"), ("b.md", "beta"), ("c.md", "gamma")],
+        )
+        .await;
+        let before = index.table.version().await.unwrap();
+        index
+            .delete_paths(&[PathScope("a.md".into()), PathScope("b.md".into())])
+            .await
+            .unwrap();
+        assert_eq!(index.table.version().await.unwrap(), before + 1);
+        let fingerprints = index.document_fingerprints().await.unwrap();
+        assert_eq!(fingerprints.keys().collect::<Vec<_>>(), vec!["c.md"]);
+    }
+
+    #[tokio::test]
+    async fn pruning_keeps_only_the_readable_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = index_with(&dir, &[("a.md", "alpha"), ("b.md", "beta")]).await;
+        assert!(index.has_old_versions().await.unwrap());
+        index.prune_versions().await.unwrap();
+        let versions = index.table.list_versions().await.unwrap();
+        assert_eq!(versions.len(), 1);
+        assert!(!index.has_old_versions().await.unwrap());
+        assert_eq!(index.document_fingerprints().await.unwrap().len(), 2);
+        assert_eq!(
+            index.slices_for_path("a.md").await.unwrap()[0]
+                .slice
+                .content,
+            "alpha"
+        );
     }
 
     #[tokio::test]

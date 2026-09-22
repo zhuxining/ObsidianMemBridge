@@ -11,6 +11,7 @@
 # Runtime data (never committed): local wiki index and lock files
 # ---------------------------------------------------------------------------
 .agentwiki/**
+.fastembed_cache/
 
 # ---------------------------------------------------------------------------
 # Python legacy (archived under legacy/python/ for reference)

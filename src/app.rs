@@ -89,6 +89,7 @@ impl AgentWiki {
         let _operation = self.operation.lock().await;
         let mut projection = self.projection.lock().await;
         let report = projection.ensure_fresh().await?;
+        let _read_lock = projection.read_lock().await?;
         let mut result = crate::retrieval::search::run_query(&projection, &query).await?;
         result.degraded.extend(report.degraded);
         Ok(result)
@@ -108,6 +109,7 @@ impl AgentWiki {
             let mut projection = self.projection.lock().await;
             // Rules only need fresh literal metadata, so skip semantic inference.
             projection.ensure_fresh_without_vectors().await?;
+            let _read_lock = projection.read_lock().await?;
             let mut counts: Vec<_> = projection.index.all_tags().await?.into_iter().collect();
             counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             counts.into_iter().map(|(tag, _)| tag).collect()

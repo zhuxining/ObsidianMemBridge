@@ -28,9 +28,12 @@
 
 - [ ] Markdown 是唯一事实源；索引可删除重建，索引失败不覆盖原文。
 - [ ] 未变化文件跳过解析；内容哈希相同只刷新指纹且不解析；内容变化只解析一次；删除、唯一内容哈希移动和失败重试语义正确。
+- [ ] replacement 同时按固定路径数和投影行数形成有界批次，超限单篇独占一批；指纹 touch 和 delete 按固定路径数分批。多路径 replacement 不删除批外路径，空批次不产生版本，touch 每路径值正确且每批只提交一次。
+- [ ] 单文档扫描、解析和 embedding 失败互相隔离；批次提交失败逐路径报告 `degraded` 并继续后续批次，提交成功后才确认 indexed/unchanged/removed/moved 和向量统计。
 - [ ] 同内容只改 mtime 时，文档与片段的时间一致，时间过滤与 recent 查询反映真实 mtime。
-- [ ] 向量按模型身份、维度和嵌入输入哈希复用，只对变化切片推理；指纹写入失败或中断后下次同步可重试。
+- [ ] 向量按模型身份、维度和嵌入输入哈希复用，只对变化切片推理；写入失败或中断后下次同步可重试。
 - [ ] 投影版本不匹配只重建 `wiki_rows`；中断的建索引在下次打开或同步后补齐。新增行未并入索引时仍可召回。
+- [ ] 同步、重建和维护持有 fs2 独占锁；query 和 rules 在刷新后以共享锁覆盖完整 Lance 读取。投影打开后的首次同步、成功写入的同步及显式维护最后使用官方 `OptimizeAction::Prune` 零保留清理，失败后重试且无待清理写入的查询不重复 prune；旧版本清除后只剩当前版本且数据可读，不使用 `OptimizeAction::All`。
 - [ ] 关键词检索使用 LanceDB FTS；启用模型时可追加语义检索，失败保留关键词能力并报告 `degraded`。
 - [ ] 空查询按真实文件 mtime 返回近期文档；scope、标签、类型、元数据和时间过滤在召回前生效。
 - [ ] 每个单元的 `search_text` 不超过 512 token 预算；中文长章节被切分为多个片段且无内容丢失；超长摘要截断后仍能被文档级检索命中；`MarkdownSplitter` 不切开能装下的代码块和段落。
@@ -50,7 +53,7 @@
 
 ### CLI 与 MCP
 
-- [ ] CLI 与 MCP 共用 `AgentWiki` 用例层，查询、校验和默认值语义一致；`optimize-index` 是唯一的显式索引并入入口，查询路径不隐式 optimize。
+- [ ] CLI 与 MCP 共用 `AgentWiki` 用例层，查询、校验和默认值语义一致；`optimize-index` 是唯一的显式索引并入入口并在维护后 prune，查询路径不隐式优化索引。
 - [ ] MCP 提供 `get_wiki_context`、`get_wiki_rules`、`validate_wiki` 三个工具。
 - [ ] `get_wiki_context` 返回 query、scope、strategy、degraded、documents、fragments、relations、truncated。
 - [ ] `get_wiki_rules` 返回有效规则、动态 `known_tags`、Wiki 根目录、指引正文和规则文件指纹。
@@ -68,7 +71,7 @@ cargo build --bin agentwiki-mcp
 git diff --check
 ```
 
-黑盒验证应使用仓库外的临时 Wiki，覆盖：首次自举、增改删移、解析失败重试、中文/中英混合/代码标识符查询、过滤、无答案、规则错误、默认只读、格式冲突和 MCP stdio 生命周期。
+黑盒验证应使用仓库外的临时 Wiki，覆盖：首次自举、多文档批量增改删移、解析与批次失败重试、跨进程读写锁、零保留版本清理、中文/中英混合/代码标识符查询、过滤、无答案、规则错误、默认只读、格式冲突和 MCP stdio 生命周期。
 
 ## 4. 当前非阻塞事项
 

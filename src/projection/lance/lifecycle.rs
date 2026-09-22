@@ -81,12 +81,24 @@ pub(super) async fn ensure_indexes(table: &Table) -> lancedb::Result<()> {
     Ok(())
 }
 
-/// Incorporate unindexed rows without compaction or pruning historical versions.
-/// Invoke under the write lock after initial sync/rebuild or explicit maintenance,
-/// not on every query. Missing indices are handled separately by `ensure_indexes`.
+/// Incorporate unindexed rows without compaction. Invoke under the write lock
+/// after initial sync/rebuild or explicit maintenance, not on every query.
 pub(super) async fn optimize_indexes(table: &Table) -> lancedb::Result<()> {
     table
         .optimize(OptimizeAction::Index(Default::default()))
+        .await?;
+    Ok(())
+}
+
+/// Remove every superseded Lance version. AgentWiki has no business-level
+/// history API, and callers exclude all readers and writers with the fs2 lock.
+pub(super) async fn prune_versions(table: &Table) -> lancedb::Result<()> {
+    table
+        .optimize(OptimizeAction::Prune {
+            older_than: Some(lancedb::table::Duration::zero()),
+            delete_unverified: Some(true),
+            error_if_tagged_old_versions: Some(true),
+        })
         .await?;
     Ok(())
 }

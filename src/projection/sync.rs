@@ -7,7 +7,11 @@ use crate::projection::types::SyncReport;
 use crate::{
     document,
     document::relation,
-    projection::{LanceIndex, embedding::Embedder, lance::embedding_input_hash},
+    projection::{
+        LanceIndex,
+        embedding::Embedder,
+        lance::{DocumentReplacement, embedding_input_hash},
+    },
 };
 use camino::Utf8Path;
 use fs2::FileExt;
@@ -18,6 +22,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 const EMBEDDING_IDENTITY: &str = "BAAI/bge-small-zh-v1.5";
 /// Bounded local inference batch; keeps peak memory predictable on large imports.
 const EMBED_BATCH_SIZE: usize = 32;
+/// Bound source predicates and pending document data. A single oversized
+/// document remains a one-item batch so existing document limits do not shrink.
+const WRITE_BATCH_PATHS: usize = 32;
+const WRITE_BATCH_ROWS: usize = 4_096;
 
 pub struct Projection {
     pub root: camino::Utf8PathBuf,
@@ -27,6 +35,23 @@ pub struct Projection {
     embedder: OnceLock<Arc<Mutex<Embedder>>>,
     embedding_error: Mutex<Option<String>>,
     lock_path: camino::Utf8PathBuf,
+    /// Set when opening finds history or a write commits, avoiding cleanup on no-op queries.
+    prune_pending: bool,
+}
+
+struct PreparedReplacement {
+    replacement: DocumentReplacement,
+    moved: bool,
+    vectors_ready: usize,
+    vectors_reused: usize,
+    vectors_pending: usize,
+}
+
+struct VectorOutcome {
+    vectors: Vec<Option<Vec<f32>>>,
+    ready: usize,
+    reused: usize,
+    pending: usize,
 }
 
 impl Projection {
@@ -46,10 +71,11 @@ impl Projection {
             })?;
         let lock_path = index_dir.join("sync.lock");
         let lock_target = lock_path.clone();
-        let _lock = tokio::task::spawn_blocking(move || acquire_lock(&lock_target))
+        let _lock = tokio::task::spawn_blocking(move || acquire_exclusive_lock(&lock_target))
             .await
             .map_err(|e| AgentWikiError::Other(format!("lock task failed: {e}")))??;
         let index = LanceIndex::open(index_dir, model.map(|_| 512)).await?;
+        let prune_pending = index.has_old_versions().await?;
         Ok(Self {
             root: root.into(),
             index,
@@ -57,6 +83,7 @@ impl Projection {
             embedder: OnceLock::new(),
             embedding_error: Mutex::new(None),
             lock_path,
+            prune_pending,
         })
     }
 
@@ -108,9 +135,17 @@ impl Projection {
         self.sync_with_vectors(false, false).await
     }
 
+    /// Hold a cross-process shared lock for the complete Lance read operation.
+    pub(crate) async fn read_lock(&self) -> Result<std::fs::File> {
+        let lock_path = self.lock_path.clone();
+        tokio::task::spawn_blocking(move || acquire_shared_lock(&lock_path))
+            .await
+            .map_err(|e| AgentWikiError::Other(format!("lock task failed: {e}")))?
+    }
+
     async fn sync_with_vectors(&mut self, rebuild: bool, embed: bool) -> Result<SyncReport> {
         let lock_path = self.lock_path.clone();
-        let _lock = tokio::task::spawn_blocking(move || acquire_lock(&lock_path))
+        let _lock = tokio::task::spawn_blocking(move || acquire_exclusive_lock(&lock_path))
             .await
             .map_err(|e| AgentWikiError::Other(format!("lock task failed: {e}")))??;
         self.sync_locked(rebuild, embed).await
@@ -140,8 +175,13 @@ impl Projection {
         }
         let mut report = SyncReport::default();
         self.embedding_degraded(&mut report);
+        let mut replacements = Vec::with_capacity(WRITE_BATCH_PATHS);
+        let mut replacement_rows = 0usize;
+        let mut touches = Vec::with_capacity(WRITE_BATCH_PATHS);
+        let mut rows_changed = false;
+
         for path in &paths {
-            let outcome: Result<bool> = async {
+            let outcome: Result<Option<PreparedReplacement>> = async {
                 document::scope_path(&self.root, &path.0)?;
                 let full = self.root.join(&path.0);
                 let metadata =
@@ -169,7 +209,7 @@ impl Projection {
                 if prev.is_some_and(|p| p.mtime_ns == stamp.mtime_ns && p.size == stamp.size)
                     && !vector_retry
                 {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 // Retrying vectors needs the parsed document again, so re-read it.
                 let previous_hash = if vector_retry {
@@ -185,12 +225,10 @@ impl Projection {
                 .await
                 .map_err(|e| AgentWikiError::Other(format!("document task failed: {e}")))?;
                 let (doc, body) = match read? {
-                    // Identical bytes: refresh the observed stamp and skip parsing.
+                    // Queue the stamp update so all unchanged documents share one commit.
                     DocumentRead::Unchanged(fingerprint) => {
-                        self.index
-                            .update_document_fingerprint(path, &fingerprint)
-                            .await?;
-                        return Ok(false);
+                        touches.push((path.clone(), fingerprint));
+                        return Ok(None);
                     }
                     DocumentRead::Changed(doc, body) => (doc, body),
                 };
@@ -205,56 +243,178 @@ impl Projection {
                     .degraded
                     .extend(warnings.into_iter().map(|w| format!("{}: {w}", path.0)));
                 let vectors = self.vectors_for(path, &slices, &mut report, embed).await?;
-                self.index
-                    .replace_document(
-                        path,
-                        &slices,
-                        &edges,
-                        &vectors,
-                        &doc.fingerprint,
-                        self.embedding_model,
-                    )
-                    .await?;
-                if prev.is_none()
+                let moved = prev.is_none()
                     && removed_by_hash
                         .get(&doc.fingerprint.content_hash)
-                        .is_some_and(|c| c.len() == 1)
-                {
-                    report.moved += 1;
-                }
-                Ok(true)
+                        .is_some_and(|c| c.len() == 1);
+                Ok(Some(PreparedReplacement {
+                    replacement: DocumentReplacement {
+                        path: path.clone(),
+                        slices,
+                        edges,
+                        vectors: vectors.vectors,
+                        fingerprint: doc.fingerprint,
+                        embedding_identity: self.embedding_model.map(str::to_owned),
+                    },
+                    moved,
+                    vectors_ready: vectors.ready,
+                    vectors_reused: vectors.reused,
+                    vectors_pending: vectors.pending,
+                }))
             }
             .await;
             match outcome {
-                Ok(true) => report.indexed += 1,
-                Ok(false) => report.unchanged += 1,
+                Ok(Some(prepared)) => {
+                    let rows = prepared.replacement.slices.len() + prepared.replacement.edges.len();
+                    if !replacements.is_empty()
+                        && replacement_rows.saturating_add(rows) > WRITE_BATCH_ROWS
+                    {
+                        rows_changed |= self
+                            .commit_replacements(&mut replacements, &mut report)
+                            .await;
+                        replacement_rows = 0;
+                    }
+                    replacement_rows = replacement_rows.saturating_add(rows);
+                    replacements.push(prepared);
+                }
+                Ok(None) if !touches.last().is_some_and(|(queued, _)| queued == path) => {
+                    report.unchanged += 1;
+                }
+                Ok(None) => {}
                 Err(e) => report.degraded.push(format!(
                     "{}: {e}; projection may be stale, retry on next sync",
                     path.0
                 )),
             }
+            if replacements.len() == WRITE_BATCH_PATHS {
+                let committed = self
+                    .commit_replacements(&mut replacements, &mut report)
+                    .await;
+                rows_changed |= committed;
+                replacement_rows = 0;
+            }
+            if touches.len() == WRITE_BATCH_PATHS {
+                rows_changed |= self.commit_touches(&mut touches, &mut report).await;
+            }
         }
-        for path in previous.keys().filter(|p| !current.contains(*p)) {
-            match self.index.delete_path(&PathScope(path.into())).await {
-                Ok(()) => report.removed += 1,
-                Err(e) => report
-                    .degraded
-                    .push(format!("{path}: deletion failed: {e}")),
+        let committed = self
+            .commit_replacements(&mut replacements, &mut report)
+            .await;
+        rows_changed |= committed;
+        rows_changed |= self.commit_touches(&mut touches, &mut report).await;
+
+        let removed = previous
+            .keys()
+            .filter(|path| !current.contains(*path))
+            .map(|path| PathScope(path.into()))
+            .collect::<Vec<_>>();
+        for paths in removed.chunks(WRITE_BATCH_PATHS) {
+            match self.index.delete_paths(paths).await {
+                Ok(()) => {
+                    report.removed += paths.len();
+                    rows_changed = true;
+                }
+                Err(error) => {
+                    for path in paths {
+                        report
+                            .degraded
+                            .push(format!("{}: deletion failed: {error}", path.0));
+                    }
+                }
             }
         }
         // Repair interrupted index builds once rows exist; never fold stale rows
-        // into existing indices implicitly.
-        if report.indexed + report.removed > 0
-            && let Err(error) = self.index.maintain_indexes(rebuild).await
-        {
+        // into existing indices implicitly except during an explicit rebuild.
+        if rows_changed && let Err(error) = self.index.maintain_indexes(rebuild).await {
             report
                 .degraded
                 .push(format!("index maintenance failed: {error}"));
+        }
+        // Pruning is last and runs at most once while the exclusive lock is held.
+        // Opening and successful writes mark cleanup pending; failures retry on
+        // the next sync without making every no-op query scan the dataset.
+        self.prune_pending |= rows_changed;
+        if self.prune_pending {
+            match self.index.prune_versions().await {
+                Ok(()) => self.prune_pending = false,
+                Err(error) => report
+                    .degraded
+                    .push(format!("version pruning failed: {error}")),
+            }
         }
         report.generation = hex::encode(Sha256::digest(
             format!("{:?}", self.index.document_fingerprints().await?).as_bytes(),
         ));
         Ok(report)
+    }
+
+    async fn commit_replacements(
+        &self,
+        batch: &mut Vec<PreparedReplacement>,
+        report: &mut SyncReport,
+    ) -> bool {
+        if batch.is_empty() {
+            return false;
+        }
+        let prepared = std::mem::take(batch);
+        let mut replacements = Vec::with_capacity(prepared.len());
+        let mut confirmations = Vec::with_capacity(prepared.len());
+        for prepared in prepared {
+            replacements.push(prepared.replacement);
+            confirmations.push((
+                prepared.moved,
+                prepared.vectors_ready,
+                prepared.vectors_reused,
+                prepared.vectors_pending,
+            ));
+        }
+        match self.index.replace_documents(&replacements).await {
+            Ok(()) => {
+                for (moved, ready, reused, pending) in confirmations {
+                    report.indexed += 1;
+                    report.moved += usize::from(moved);
+                    report.vectors_ready += ready;
+                    report.vectors_reused += reused;
+                    report.vectors_pending += pending;
+                }
+                true
+            }
+            Err(error) => {
+                for replacement in replacements {
+                    report.degraded.push(format!(
+                        "{}: replacement failed: {error}; retry on next sync",
+                        replacement.path.0
+                    ));
+                }
+                false
+            }
+        }
+    }
+
+    async fn commit_touches(
+        &self,
+        batch: &mut Vec<(PathScope, Fingerprint)>,
+        report: &mut SyncReport,
+    ) -> bool {
+        if batch.is_empty() {
+            return false;
+        }
+        match self.index.update_document_fingerprints(batch).await {
+            Ok(()) => {
+                report.unchanged += batch.len();
+                batch.clear();
+                true
+            }
+            Err(error) => {
+                for (path, _) in batch.drain(..) {
+                    report.degraded.push(format!(
+                        "{}: fingerprint update failed: {error}; retry on next sync",
+                        path.0
+                    ));
+                }
+                false
+            }
+        }
     }
 
     /// Reuse vectors whose exact model/dimension/input hash is already stored and
@@ -265,14 +425,23 @@ impl Projection {
         slices: &[Slice],
         report: &mut SyncReport,
         embed: bool,
-    ) -> Result<Vec<Option<Vec<f32>>>> {
+    ) -> Result<VectorOutcome> {
         let Some(identity) = self.embedding_model.filter(|_| embed) else {
-            return Ok(vec![None; slices.len()]);
+            return Ok(VectorOutcome {
+                vectors: vec![None; slices.len()],
+                ready: 0,
+                reused: 0,
+                pending: 0,
+            });
         };
         let Some(embedder) = self.embedder().await else {
-            report.vectors_pending += slices.len();
             self.embedding_degraded(report);
-            return Ok(vec![None; slices.len()]);
+            return Ok(VectorOutcome {
+                vectors: vec![None; slices.len()],
+                ready: 0,
+                reused: 0,
+                pending: slices.len(),
+            });
         };
         let reusable = match self.index.reusable_vectors(path).await {
             Ok(reusable) => reusable,
@@ -327,33 +496,40 @@ impl Projection {
                 }
             }
         }
-        report.vectors_reused += reused;
-        report.vectors_ready += vectors.iter().filter(|v| v.is_some()).count();
-        report.vectors_pending += vectors.iter().filter(|v| v.is_none()).count();
-        Ok(vectors)
+        Ok(VectorOutcome {
+            ready: vectors.iter().filter(|v| v.is_some()).count(),
+            reused,
+            pending: vectors.iter().filter(|v| v.is_none()).count(),
+            vectors,
+        })
     }
 
     pub async fn rebuild(&mut self) -> Result<SyncReport> {
         let lock_path = self.lock_path.clone();
-        let _lock = tokio::task::spawn_blocking(move || acquire_lock(&lock_path))
+        let _lock = tokio::task::spawn_blocking(move || acquire_exclusive_lock(&lock_path))
             .await
             .map_err(|e| AgentWikiError::Other(format!("lock task failed: {e}")))??;
         self.index.reset().await?;
+        self.prune_pending = true;
         self.sync_locked(true, true).await
     }
 
-    /// Explicit maintenance: repair indices and fold new rows into them.
+    /// Explicit maintenance: repair indices, fold new rows into them, then prune.
     pub async fn maintain(&mut self) -> Result<()> {
         let lock_path = self.lock_path.clone();
-        let _lock = tokio::task::spawn_blocking(move || acquire_lock(&lock_path))
+        let _lock = tokio::task::spawn_blocking(move || acquire_exclusive_lock(&lock_path))
             .await
             .map_err(|e| AgentWikiError::Other(format!("lock task failed: {e}")))??;
-        self.index.maintain_indexes(true).await
+        let maintenance = self.index.maintain_indexes(true).await;
+        let pruning = self.index.prune_versions().await;
+        self.prune_pending = pruning.is_err();
+        maintenance?;
+        pruning
     }
 }
 
-fn acquire_lock(path: &Utf8Path) -> Result<std::fs::File> {
-    let file = std::fs::OpenOptions::new()
+fn open_lock_file(path: &Utf8Path) -> Result<std::fs::File> {
+    std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
@@ -362,8 +538,21 @@ fn acquire_lock(path: &Utf8Path) -> Result<std::fs::File> {
         .map_err(|source| AgentWikiError::Io {
             path: path.into(),
             source,
-        })?;
-    file.lock_exclusive().map_err(|source| AgentWikiError::Io {
+        })
+}
+
+fn acquire_exclusive_lock(path: &Utf8Path) -> Result<std::fs::File> {
+    let file = open_lock_file(path)?;
+    FileExt::lock_exclusive(&file).map_err(|source| AgentWikiError::Io {
+        path: path.into(),
+        source,
+    })?;
+    Ok(file)
+}
+
+fn acquire_shared_lock(path: &Utf8Path) -> Result<std::fs::File> {
+    let file = open_lock_file(path)?;
+    FileExt::lock_shared(&file).map_err(|source| AgentWikiError::Io {
         path: path.into(),
         source,
     })?;

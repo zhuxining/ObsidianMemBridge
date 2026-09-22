@@ -51,6 +51,7 @@ cargo run --bin agentwiki query ""
 cargo run --bin agentwiki validate-wiki --path decisions/auth.md --fix-format
 cargo run --bin agentwiki validate-wiki --full --fix-format
 cargo run --bin agentwiki-mcp
+cargo install --path . --locked --force
 ```
 
 默认校验不写文件。单文件修复必须指定 `--path`，全库修复必须指定 `--full`；两种范围互斥。格式修复不修正标签、链接或业务内容。

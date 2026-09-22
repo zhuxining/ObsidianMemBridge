@@ -105,6 +105,49 @@ async fn rename_is_reported_as_a_move() {
     assert_eq!(result.fragments[0].slice.path.0.as_str(), "new.md");
 }
 
+#[tokio::test]
+async fn multiple_documents_commit_across_bounded_batches() {
+    let wiki = tempfile::tempdir().unwrap();
+    let projection = tempfile::tempdir().unwrap();
+    for index in 0..35 {
+        std::fs::write(
+            wiki.path().join(format!("note-{index}.md")),
+            format!("# Note {index}\n\ninitial batch evidence {index}\n"),
+        )
+        .unwrap();
+    }
+    let app = open(&wiki, &projection).await;
+    let initial = app.sync().await.unwrap();
+    assert_eq!(initial.indexed, 35);
+    assert_eq!(initial.vectors_pending, 0);
+    assert_eq!(initial.degraded, Vec::<String>::new());
+
+    for index in 0..35 {
+        std::fs::write(
+            wiki.path().join(format!("note-{index}.md")),
+            format!("# Note {index}\n\nupdated batch evidence {index}\n"),
+        )
+        .unwrap();
+    }
+    let updated = app.sync().await.unwrap();
+    assert_eq!(updated.indexed, 35);
+    assert_eq!(updated.degraded, Vec::<String>::new());
+
+    for index in 0..35 {
+        std::fs::remove_file(wiki.path().join(format!("note-{index}.md"))).unwrap();
+    }
+    let removed = app.sync().await.unwrap();
+    assert_eq!(removed.removed, 35);
+    assert_eq!(removed.degraded, Vec::<String>::new());
+    assert!(
+        app.query(ContextQuery::default())
+            .await
+            .unwrap()
+            .documents
+            .is_empty()
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_use_cases_are_serialized_without_deadlock() {
     let wiki = tempfile::tempdir().unwrap();
